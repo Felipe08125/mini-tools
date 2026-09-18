@@ -18,4 +18,4 @@ mini-tools/
 
 ## Autor
 
-Felipe Sepúlveda — Ing. Civil Informática, UdeC.
+Felipe Sepúlveda — Estudiante de Ing. Civil Informática, UdeC.
