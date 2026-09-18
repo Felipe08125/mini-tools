@@ -1,0 +1,16 @@
+# Datos personales exportados de Instagram (nunca subir)
+followers_*.json
+following.json
+*.json
+!ejemplo/*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor / sistema
+.vscode/
+.idea/
+.DS_Store
