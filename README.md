@@ -15,7 +15,3 @@ mini-tools/
 │   └── README.md
 └── README.md
 ```
-
-## Autor
-
-Felipe Sepúlveda — Estudiante de Ing. Civil Informática, UdeC.
