@@ -10,7 +10,7 @@ Usa **solo el export oficial de Instagram**. No inicia sesión, no usa scraping 
 ## Requisitos
 
 - Python 3.8 o superior
-- Sin dependencias externas (solo usa `json`)
+- Sin dependencias externas (solo usa `json` y `pathlib`)
 
 ## Cómo usarlo
 
@@ -18,9 +18,7 @@ Usa **solo el export oficial de Instagram**. No inicia sesión, no usa scraping 
    **Configuración → Centro de cuentas → Tu información y permisos → Descargar tu información**
    - Elige formato **JSON**
    - Selecciona solo *Seguidores y seguidos*
-2. Del archivo descargado, copia estos dos archivos a la misma carpeta que `main.py`:
-   - `followers_1.json`
-   - `following.json`
+2. Del archivo descargado, copia la carpeta `followers_and_following` (que contiene `followers_*.json` y `following.json`) a la misma carpeta que `main.py`.
 3. Ejecuta:
 
    ```bash
@@ -47,6 +45,6 @@ Los archivos `followers_*.json` y `following.json` contienen nombres de usuario 
 
 ## Cómo funciona
 
-- Lee ambos JSON y extrae los usernames (usando `value`, o el final del `href` si falta).
+- Lee todos los `followers_*.json` y `following.json` dentro de `followers_and_following/`, extrayendo los usernames (en orden: `title` → `value` → final de `href`).
 - Los guarda en `set` de Python.
 - Calcula las diferencias con operaciones de conjuntos: `following - followers` y `followers - following`.

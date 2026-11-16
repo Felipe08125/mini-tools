@@ -2,6 +2,7 @@
 followers_*.json
 following.json
 *.json
+followers_and_following/
 !ejemplo/*.json
 
 # Python
