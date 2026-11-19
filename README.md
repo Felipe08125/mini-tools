@@ -4,12 +4,18 @@ Colección de scripts pequeños que voy haciendo para resolver cosas del día a 
 
 | Herramienta | Qué hace |
 |-------------|----------|
+| [bugreport-analyzer](./bugreport-analyzer) | Analiza informes de errores (bugreport) de Android con diagnóstico técnico y resumen claro |
 | [instagram-unfollowers](./instagram-unfollowers) | Compara seguidores y seguidos desde el export oficial de Instagram |
 
 ## Estructura
 
 ```
 mini-tools/
+├── bugreport-analyzer/
+│   ├── main.py
+│   ├── html_report.py
+│   ├── test_analyzer.py
+│   └── README.md
 ├── instagram-unfollowers/
 │   ├── main.py
 │   └── README.md

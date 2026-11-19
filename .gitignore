@@ -15,3 +15,12 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Informes de errores de Android (contienen datos personales, nunca subir)
+report/
+bugreport-*/
+!bugreport-analyzer/
+bugreport-analyzer/report/
+bugreport-*.zip
+dumpstate*.txt
+informe_diagnostico*.html
