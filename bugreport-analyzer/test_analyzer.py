@@ -1,12 +1,29 @@
+import contextlib
 import io
+import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from discovery import (  # noqa: E402
+    buscar_reporte_por_fecha,
+    capturar_bugreport_adb,
+    extraer_zip_seguro,
+    listar_reportes_por_fecha,
+    localizar_archivo_principal,
+    parsear_fecha_carpeta,
+)
+from history import (  # noqa: E402
+    SCHEMA_VERSION,
+    comparar_reportes,
+    construir_metrics_summary,
+)
 from html_report import generar_html  # noqa: E402
 from main import (  # noqa: E402
     abrir_dumpstate,
@@ -283,6 +300,83 @@ pkg,com.spotify.music,10473
 """
 
 
+DUMPSTATE_TIMELINE_Y_PRIVACIDAD = """========================================================
+== dumpstate: 2026-11-20 15:00:00
+========================================================
+
+Build: TEST.202611.002
+Network: OPERADOR-DEMO
+
+------ SYSTEM LOG (logcat -v threadtime -v printable -v uid -d *:v) ------
+11-20 14:11:00.100  1000  2000  2000 I ActivityManager: ANR in com.instagram.android (com.instagram.android/.MainActivity)
+11-20 14:11:00.101  1000  2000  2000 I ActivityManager: Reason: Input dispatching timed out MAC=AA:BB:CC:DD:EE:FF IMEI=123456789012345
+11-20 14:11:10.000  1000  1100  1100 I lowmemorykiller: Kill 'com.spotify.music' (4100), uid 10473, oom_score_adj 900
+11-20 14:12:00.000  1000  2963  3296 D BrightnessThermalClamper: Thermal status observer already started
+11-20 14:12:05.000  1000  2963  3296 W ThermalManager: Throttling active status=2 serialno=SERIAL_SECRETO_XYZ
+11-20 14:13:00.000 10000  5000  5000 E </script><script>alert(9)</script>: fallo con tag
+------ 0.500s was the duration of 'SYSTEM LOG' ------
+
+------ KERNEL LOG (dmesg) ------
+<6>[10000.000000][ T100] init: running
+<3>[13600.000000][ T101] oom-killer invoked for SERIAL_SECRETO_XYZ MAC=11:22:33:44:55:66
+------ 0.010s was the duration of 'KERNEL LOG (dmesg)' ------
+
+------ THERMAL DUMP (/proc/sec_pm_log/thermal_log) ------
+[10665.000000] Start lmh cpu7 @2937
+[10666.000000] Start lmh cpu7 @2995
+------ 0.001s was the duration of 'THERMAL DUMP' ------
+
+------ SYSTEM PROPERTIES (getprop) ------
+[ro.product.manufacturer]: [samsung]
+[ro.product.model]: [SM-DEMO1]
+[ro.build.version.release]: [16]
+[ro.build.version.oneui]: [80500]
+[ro.build.display.id]: [TEST.202611.002]
+[ro.build.version.security_patch]: [2026-11-01]
+[ro.boot.verifiedbootstate]: [green]
+[ro.boot.flash.locked]: [1]
+[ro.boot.warranty_bit]: [0]
+[ro.crypto.state]: [encrypted]
+[ro.boot.serialno]: [SERIAL_SECRETO_XYZ]
+------ 0.001s was the duration of 'SYSTEM PROPERTIES' ------
+
+------ DUMPSYS NORMAL (/system/bin/dumpsys) ------
+DUMP OF SERVICE battery:
+  level: 45
+  voltage: 3810
+  temperature: 395
+  mSavedBatteryAsoc: [96]
+  mSavedBatteryUsage: [15000]
+--------- 0.010s was the duration of dumpsys battery
+
+DUMP OF SERVICE batterystats:
+  Battery History [Format: 2] (5% used):
+    11-20 14:00:00.000 RESET:TIME: 2026-11-20-14-00-00-000
+    11-20 14:00:00.100 060 c010001a status=discharging temp=310 volt=4120 ap_temp=35.0 skin_temp=32.0
+    11-20 14:10:00.000 058 c010001a status=discharging temp=405 volt=3820 ap_temp=48.5 skin_temp=42.1
+    11-20 14:15:00.000 055 c010001a status=discharging temp=395 volt=3890 ap_temp=41.0 skin_temp=37.0
+Statistics since last charge:
+  Estimated battery capacity: 5000 mAh
+  Time on battery: 2h 0m 0s 0ms (80.0%) realtime, 1h 0m 0s 0ms (50.0%) uptime
+  Time on battery screen off: 1h 0m 0s 0ms (50.0%) realtime, 40m 0s 0ms (66.7%) uptime
+  Discharge: 1100 mAh
+  Screen on: 1h 0m 0s 0ms (50.0%) 12x
+  Estimated power use (mAh):
+    Global
+    screen: 400 apps: 400
+  UID u0a200: 550 fg: 120 (20m 0s 0ms) fgs: 180 (45m 0s 0ms)
+--------- 0.020s was the duration of dumpsys batterystats
+
+DUMP OF SERVICE wifi:
+  rec[0]: ssid = "SSID_SECRETO_CASA"
+--------- 0.010s was the duration of dumpsys wifi
+
+------ CHECKIN BATTERYSTATS (/system/bin/dumpsys -T 30000 batterystats -c) ------
+9,0,i,uid,10200,com.instagram.android
+------ 0.010s was the duration of 'CHECKIN BATTERYSTATS' ------
+"""
+
+
 class TestBugreportAnalyzer(unittest.TestCase):
     def test_parseo_y_resolucion_uids(self):
         datos = analizar_dumpstate(io.StringIO(DUMPSTATE_SANO))
@@ -398,6 +492,205 @@ class TestBugreportAnalyzer(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertTrue(salida_html.is_file())
             self.assertIn("SM-DEMO1", salida_html.read_text(encoding="utf-8"))
+
+    def test_descubrimiento_fechas_mixto_y_subcarpetas(self):
+        self.assertEqual(parsear_fecha_carpeta("2026-10-01")[1], "2026-10-01")
+        self.assertEqual(parsear_fecha_carpeta("18_11_26")[1], "2026-11-18")
+        self.assertIsNone(parsear_fecha_carpeta("no-es-fecha"))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rep_dir = Path(tmp) / "report"
+            rep_dir.mkdir()
+
+            # 1) YYYY-MM-DD con bugreport-*.txt en raíz y carpeta FS/
+            d1 = rep_dir / "2026-10-01"
+            (d1 / "FS").mkdir(parents=True)
+            (d1 / "bugreport-SM8550-2026-10-01.txt").write_text(DUMPSTATE_SANO, encoding="utf-8")
+            (d1 / "version.txt").write_text("1", encoding="utf-8")
+
+            # 2) DD_MM_YY con subcarpeta extraída
+            d2 = rep_dir / "18_11_26"
+            sub2 = d2 / "bugreport-2026-11-18"
+            (sub2 / "FS").mkdir(parents=True)
+            (sub2 / "dumpstate.txt").write_text(DUMPSTATE_SANO, encoding="utf-8")
+
+            # 3) YYYY-MM-DD con dumpstate.txt en raíz
+            d3 = rep_dir / "2026-11-20"
+            (d3 / "lshal-debug").mkdir(parents=True)
+            (d3 / "dumpstate.txt").write_text(DUMPSTATE_TIMELINE_Y_PRIVACIDAD, encoding="utf-8")
+
+            reportes = listar_reportes_por_fecha(rep_dir)
+            self.assertEqual([r["fecha_iso"] for r in reportes], ["2026-10-01", "2026-11-18", "2026-11-20"])
+            self.assertEqual(localizar_archivo_principal(d1).name, "bugreport-SM8550-2026-10-01.txt")
+            self.assertEqual(localizar_archivo_principal(d2), (sub2 / "dumpstate.txt").resolve())
+
+            # Buscar por YYYY-MM-DD debe encontrar 18_11_26
+            hallado = buscar_reporte_por_fecha(rep_dir, "2026-11-18")
+            self.assertEqual(hallado["carpeta_nombre"], "18_11_26")
+
+            # resolver_fuente sin argumento sobre base_script apuntando al tmp padre selecciona el más reciente
+            mas_reciente = resolver_fuente(base_script=Path(tmp))
+            self.assertEqual(mas_reciente.name, "2026-11-20")
+
+    def test_metricas_streaming_timeline_correlacion_y_privacidad(self):
+        datos = analizar_dumpstate(io.StringIO(DUMPSTATE_TIMELINE_Y_PRIVACIDAD))
+        bat = datos["bateria"]
+        rt = datos["rendimiento_termico"]
+        mem = datos["memoria"]
+        lt = datos["linea_tiempo"]
+
+        # Deep sleep: 2h realtime - 1h uptime = 50%; screen off: 60m - 40m = 33.3%
+        self.assertEqual(bat["deep_sleep_pct"], 50.0)
+        self.assertEqual(bat["deep_sleep_screen_off_pct"], 33.3)
+        self.assertEqual(rt["temperatura_max_c"], 48.5)
+        self.assertEqual(rt["temperatura_max_sensor"], "AP")
+        self.assertEqual(rt["eventos_throttling"], 2)  # 1 episodio LMH coalescido + 1 logcat
+        self.assertEqual(mem["lmkd_kills"], 1)
+        self.assertGreaterEqual(mem["eventos_presion_memoria"], 2)
+
+        # Serie Battery History + eventos correlacionados
+        self.assertGreaterEqual(len(lt["series"]), 3)
+        tipos_ev = {e["tipo"] for e in lt["eventos"]}
+        self.assertIn("pico_termico", tipos_ev)
+        self.assertIn("caida_voltaje", tipos_ev)
+        self.assertIn("anr", tipos_ev)
+        self.assertIn("lmkd_kill", tipos_ev)
+        self.assertIn("throttling_lmh", tipos_ev)
+        self.assertGreaterEqual(len(lt["correlaciones"]), 1)
+
+        # Privacidad y escape seguro en JSON/HTML
+        diag = diagnosticar(datos)
+        summary = construir_metrics_summary(datos, diag, fecha_iso="2026-11-20")
+        html_out = generar_html(datos, diag)
+        todo = json.dumps(summary, ensure_ascii=False) + "\n" + html_out
+
+        for secreto in (
+            "SERIAL_SECRETO_XYZ",
+            "AA:BB:CC:DD:EE:FF",
+            "11:22:33:44:55:66",
+            "123456789012345",
+            "SSID_SECRETO_CASA",
+        ):
+            self.assertNotIn(secreto, todo)
+        # No debe romper el tag <script> con cierre prematuro
+        self.assertNotIn("</script><script>alert(9)</script>", html_out)
+
+    def test_esquema_summary_all_diff_y_regresiones(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rep_dir = root / "report"
+            (rep_dir / "2026-10-01").mkdir(parents=True)
+            (rep_dir / "2026-11-20" / "sub").mkdir(parents=True)
+
+            (rep_dir / "2026-10-01" / "dumpstate.txt").write_text(DUMPSTATE_SANO, encoding="utf-8")
+            (rep_dir / "2026-11-20" / "sub" / "dumpstate.txt").write_text(
+                DUMPSTATE_TIMELINE_Y_PRIVACIDAD, encoding="utf-8"
+            )
+
+            with mock.patch("main.DIR_SCRIPT", root):
+                buf1 = io.StringIO()
+                with contextlib.redirect_stdout(buf1):
+                    rc1 = cli_main(["--all"])
+                self.assertEqual(rc1, 0)
+                self.assertIn("2 analizado(s)", buf1.getvalue())
+
+                # Segunda pasada con --all debe omitir ambos
+                buf2 = io.StringIO()
+                with contextlib.redirect_stdout(buf2):
+                    rc2 = cli_main(["--all"])
+                self.assertEqual(rc2, 0)
+                self.assertIn("0 analizado(s), 2 ya tenían análisis", buf2.getvalue())
+
+                # Verificar metrics_summary.json y evolución automática en el más reciente
+                sum_ruta_1 = rep_dir / "2026-10-01" / "metrics_summary.json"
+                sum_ruta_2 = rep_dir / "2026-11-20" / "metrics_summary.json"
+                html_ruta_2 = rep_dir / "2026-11-20" / "informe_diagnostico.html"
+                self.assertTrue(sum_ruta_1.is_file())
+                self.assertTrue(sum_ruta_2.is_file())
+                self.assertTrue(html_ruta_2.is_file())
+
+                s1 = json.loads(sum_ruta_1.read_text(encoding="utf-8"))
+                s2 = json.loads(sum_ruta_2.read_text(encoding="utf-8"))
+                self.assertEqual(s2["schema_version"], SCHEMA_VERSION)
+                for clave in (
+                    "schema_version",
+                    "fecha_reporte",
+                    "dispositivo",
+                    "puntuacion_general",
+                    "bateria",
+                    "top_procesos",
+                    "termico",
+                    "memoria_psi",
+                    "almacenamiento",
+                    "estabilidad",
+                ):
+                    self.assertIn(clave, s2)
+
+                diff = comparar_reportes(s2, s1)
+                self.assertTrue(diff["actualizacion_sistema"]["cambio"])
+                self.assertTrue(any("Instagram" in r for r in diff["regresiones"]))
+
+                html_2 = html_ruta_2.read_text(encoding="utf-8")
+                self.assertIn("Evolución vs. reporte anterior", html_2)
+                self.assertIn("Correlación temporal interactiva", html_2)
+
+                # Ejecutar --diff explícito y --date
+                buf_diff = io.StringIO()
+                with contextlib.redirect_stdout(buf_diff):
+                    rc_diff = cli_main(["--diff", "2026-10-01", "2026-11-20"])
+                self.assertEqual(rc_diff, 0)
+                out_diff = buf_diff.getvalue()
+                self.assertIn("COMPARATIVA HISTÓRICA", out_diff)
+                self.assertTrue(any(sim in out_diff for sim in ("▲", "▼", "=")))
+
+                buf_date = io.StringIO()
+                with contextlib.redirect_stdout(buf_date):
+                    rc_date = cli_main(["--date", "2026-10-01"])
+                self.assertEqual(rc_date, 0)
+                self.assertIn("2026-06-15", buf_date.getvalue())
+
+    def test_adb_captura_descompresion_y_zip_slip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rep_dir = root / "report"
+            rep_dir.mkdir()
+
+            # 1) Sin dispositivo conectado debe lanzar error descriptivo
+            fake_empty = subprocess.CompletedProcess(
+                args=["adb", "devices"],
+                returncode=0,
+                stdout="List of devices attached\n\n",
+                stderr="",
+            )
+            with mock.patch("discovery.subprocess.run", return_value=fake_empty):
+                with self.assertRaises(RuntimeError):
+                    capturar_bugreport_adb(rep_dir, fecha_iso="2026-11-20")
+
+            # 2) Flujo exitoso: crea report/<fecha>/, descomprime y borra el .zip temporal
+            def fake_adb_run(cmd, capture_output=True, text=True, check=False):
+                if cmd[:2] == ["adb", "devices"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, "List of devices attached\nFAKE123\tdevice\n", ""
+                    )
+                if cmd[:2] == ["adb", "bugreport"]:
+                    ruta_zip = Path(cmd[2])
+                    with zipfile.ZipFile(ruta_zip, "w") as zf:
+                        zf.writestr("main_entry.txt", "dumpstate.txt")
+                        zf.writestr("dumpstate.txt", DUMPSTATE_SANO)
+                    return subprocess.CompletedProcess(cmd, 0, "ok", "")
+                raise AssertionError(f"Comando inesperado: {cmd}")
+
+            with mock.patch("discovery.subprocess.run", side_effect=fake_adb_run):
+                carpeta = capturar_bugreport_adb(rep_dir, fecha_iso="2026-11-20")
+            self.assertTrue((carpeta / "dumpstate.txt").is_file())
+            self.assertEqual(list(carpeta.glob("*.zip")), [])
+
+            # 3) Protección contra Zip-Slip
+            mal_zip = Path(tmp) / "malicioso.zip"
+            with zipfile.ZipFile(mal_zip, "w") as zf:
+                zf.writestr("../../escape.txt", "evil")
+            with self.assertRaises(ValueError):
+                extraer_zip_seguro(mal_zip, rep_dir / "zip_test")
 
 
 if __name__ == "__main__":

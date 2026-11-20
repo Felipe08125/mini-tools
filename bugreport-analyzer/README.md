@@ -1,67 +1,67 @@
 # bugreport-analyzer
 
-Herramienta en Python que analiza el **informe de errores (bugreport)** de un teléfono Android y combina un análisis técnico detallado con explicaciones claras para usuarios no técnicos.
+Herramienta en Python (biblioteca estándar, 0 dependencias externas) que analiza informes de errores (`bugreport`) de Android mediante streaming en una sola pasada y mantiene seguimiento histórico entre fechas.
 
-Genera:
+## Arquitectura modular
 
-- 🖥️ Un resumen rápido con semáforo (`🟢` / `🟡` / `🔴`) y recomendaciones en consola
-- 📄 Un reporte HTML interactivo offline (`informe_diagnostico.html`) con tarjetas visuales y bloques técnicos desplegables
+- `discovery.py`: descubrimiento de carpetas por fecha en `report/` (`YYYY-MM-DD` y `DD_MM_YY` / `DD-MM-YY`), localización automática de `dumpstate.txt` o `bugreport-*.txt` en raíz o subcarpetas extraídas, lectura streaming (`abrir_dumpstate`) y captura/descompresión segura vía `--adb`.
+- `parser.py`: motor de análisis en una sola pasada por streaming (`analizar_dumpstate`), cálculo de *Deep Sleep*, temperaturas máximas, presión PSI / kills LMKD, reconstrucción de línea de tiempo unificada y correlaciones, sanitización estricta de privacidad y diagnóstico (`diagnosticar`).
+- `history.py`: generación y carga de `metrics_summary.json` (`schema_version = 1`) y motor de comparación histórica (`comparar_reportes`) para detectar actualizaciones del sistema, regresiones y apps con drenaje en segundo plano.
+- `html_report.py`: generador HTML autocontenido con evolución comparativa, gráfico SVG de tendencia histórica y línea de tiempo interactiva (SVG + Vanilla JS) filtrable por severidad y categoría.
+- `main.py`: CLI principal, orquestación de modos (`--date`, `--all`, `--diff`, `--adb`) y salida en consola enriquecida con indicadores `▲` / `▼` / `=`.
 
 ## Requisitos
 
 - Python 3.8 o superior
-- Sin dependencias externas (solo usa la biblioteca estándar de Python)
+- Sin dependencias externas (exclusivamente biblioteca estándar de Python)
 
-## Cómo usarlo
+## Estructura esperada en `report/`
 
-1. Genera el informe de errores en tu teléfono Android:
-   - Activa las **Opciones de desarrollador** (*Ajustes → Acerca del teléfono → Información de software → toca 7 veces en Número de compilación*)
-   - Ve a **Ajustes → Opciones de desarrollador → Informe de errores → Informe completo** (o *Tomar informe de errores*)
-2. Copia el archivo `.zip` o la carpeta descomprimida dentro de `bugreport-analyzer/report/` (a la misma altura que `main.py`), o pásale la ruta por argumento.
-3. Ejecuta desde la raíz del proyecto o dentro de `bugreport-analyzer/`:
+Acepta carpetas descomprimidas organizadas por fecha (`YYYY-MM-DD`, o formatos existentes tipo `DD_MM_YY` como `18_11_26`) con el archivo principal en la raíz o dentro de una subcarpeta extraída:
 
-   ```bash
-   python3 bugreport-analyzer/main.py
-   # o desde dentro de bugreport-analyzer/:
-   python3 main.py
-   ```
-
-   También puedes indicar una ruta específica o elegir el nombre del archivo HTML de salida:
-
-   ```bash
-   python3 bugreport-analyzer/main.py ruta/al/bugreport.zip -o mi_diagnostico.html
-   ```
-
-4. Abre `bugreport-analyzer/informe_diagnostico.html` en cualquier navegador web.
-
-## Ejemplo de salida
-
+```text
+report/
+├── 2026-10-01/
+│   ├── bugreport-SM8550-2026-10-01.txt
+│   ├── FS/
+│   └── version.txt
+├── 2026-11-15/
+│   └── bugreport-2026-11-15/
+│       ├── dumpstate.txt
+│       └── FS/
+└── 2026-11-20/
+    ├── dumpstate.txt
+    └── lshal-debug/
 ```
-==================================================================
-📱 DIAGNÓSTICO DEL INFORME DE ERRORES
-==================================================================
-Equipo:         samsung SM-DEMO1 (SM8550)
-Sistema:        Android 15 · One UI 7.0 (parche 2026-05-05)
-Fecha informe:  2026-06-15 12:00:00
-Encendido hace: 3 days, 04:10
-------------------------------------------------------------------
-Estado general: 🟡 Buen estado con observaciones — Puntuación: 84/100
-...
-📄 Reporte detallado HTML guardado en:
-   .../bugreport-analyzer/informe_diagnostico.html
+
+## Uso rápido
+
+```bash
+# Analizar automáticamente la fecha más reciente en report/ (y comparar contra la anterior)
+python3 bugreport-analyzer/main.py
+
+# Analizar una fecha puntual
+python3 bugreport-analyzer/main.py --date 2026-11-20
+
+# Procesar en lote todas las fechas pendientes de report/
+python3 bugreport-analyzer/main.py --all
+
+# Comparar dos fechas explícitamente
+python3 bugreport-analyzer/main.py --diff 2026-11-18 2026-11-20
+
+# Capturar bugreport por ADB en report/<YYYY-MM-DD>/, descomprimir y analizar al instante
+python3 bugreport-analyzer/main.py --adb
+
+# Modo retrocompatible con ruta directa (.zip, dumpstate.txt o carpeta)
+python3 bugreport-analyzer/main.py ruta/al/bugreport.zip -o mi_diagnostico.html
 ```
+
+Cada carpeta analizada en `report/<fecha>/` guarda:
+- `metrics_summary.json`: resumen ligero y sanitizado para comparaciones históricas.
+- `informe_diagnostico.html`: reporte interactivo offline con evolución histórica y línea de tiempo SVG/JS.
 
 ## Privacidad
 
-Los informes de errores contienen registros del sistema, aplicaciones instaladas e identificadores del teléfono.
-- El análisis corre **100% en local**, sin enviar datos a internet.
-- La herramienta omite datos sensibles como número de serie, IMEI y nombres de redes Wi-Fi.
-- Las carpetas `report/`, `bugreport-*/` y los archivos `informe_diagnostico*.html` están incluidos en `.gitignore` para evitar subirlos por accidente.
-
-## Cómo funciona
-
-- Acepta una carpeta `bugreport-*`, un archivo `.zip` o directamente un `dumpstate.txt`.
-- Lee el archivo completo en **una sola pasada por streaming** (sin cargarlo entero en memoria) para procesar archivos grandes (200+ MB) en segundos.
-- Cruza datos de `batterystats`, `battery`, `meminfo`, `diskstats`, `df`, `UFS`, `thermalservice`, `PSI`, `logcat`, `dmesg`, `AP RESET INFO`, `telephony`, `wifi` y `getprop`.
-- Resuelve los identificadores `UID` internos de Android al nombre real de cada aplicación usando la tabla de paquetes del propio informe.
-- Filtra latidos informativos de diagnóstico (como `Watchdog: !@Sync:`) para evitar falsas alarmas y traduce los hallazgos a lenguaje cotidiano.
+- El análisis corre **100% offline** en local.
+- Se omiten y redactan identificadores sensibles: número de serie (`ro.boot.serialno`), IMEI/MEID/IMSI, direcciones MAC y nombres de redes Wi-Fi (SSID).
+- `report/` e `informe_diagnostico*.html` permanecen ignorados en `.gitignore`.
